@@ -1,6 +1,7 @@
 import { type FastifyInstance } from 'fastify'
 import { prisma } from '../../lib/prisma'
 import { z } from 'zod'
+import { redis } from '../../lib/redis'
 
 export async function getPoll (app: FastifyInstance): Promise<void> {
   app.get('/polls/:pollId', async (request, reply) => {
@@ -23,6 +24,32 @@ export async function getPoll (app: FastifyInstance): Promise<void> {
       }
     })
 
-    return await reply.send({ poll })
+    if (!poll) {
+      return await reply.status(400).send({ message: 'poll not found' })
+    }
+
+    const result = await redis.zrange(pollId, 0, -1, 'WITHSCORES')
+
+    const votes: Record<string, number> = result.reduce<Record<string, number>>((obj: Record<string, number>, line, index) => {
+      if (index % 2 === 0) {
+        const score = Number(result[index + 1])
+        obj[line] = score
+      }
+      return obj
+    }, {})
+
+    return await reply.send({
+      poll: {
+        id: poll.id,
+        title: poll.title,
+        options: poll.options.map(option => {
+          return {
+            id: option.id,
+            title: option.title,
+            score: (option.id in votes) ? votes[option.id] : 0
+          }
+        })
+      }
+    })
   })
 }
